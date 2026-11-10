@@ -34,6 +34,11 @@ CONSTITUENTS = ("2n2", "j1", "k1", "k2", "m2", "m4", "mf", "mm", "n2", "o1", "p1
 # A fixed "cycle" (2021-01-01, the EOT20 release year): the map does not change between runs.
 CYCLE = 1_609_459_200
 VARS = [f"{c}_{part}" for c in CONSTITUENTS for part in ("re", "im")]
+# Largest believable amplitude per constituent, cm (the Bay of Fundy has the world's biggest tides: M2 about
+# 5 m). EOT20 has unrealistic values in a few shallow river mouths (St Lawrence, Amazon: S2 above 30 m);
+# a point where any constituent is above its limit gets no tide rather than a wrong one.
+MAX_AMPLITUDE_CM = {"2n2": 40, "j1": 25, "k1": 300, "k2": 80, "m2": 600, "m4": 100, "mf": 30, "mm": 40, "n2": 130,
+                    "o1": 200, "p1": 100, "q1": 40, "s1": 20, "s2": 250, "sa": 50, "ssa": 20, "t2": 20}
 
 
 def grid_positions() -> tuple[np.ndarray, np.ndarray]:
@@ -107,21 +112,34 @@ def build(fields: dict[str, np.ndarray], out: Path) -> Path:
 
 
 def _read_nc(data: bytes) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """amplitude, phase, lat, lon from one EOT20 file (netCDF4 = HDF5)."""
+    """amplitude, phase, lat, lon from one EOT20 file (netCDF4/HDF5, or classic netCDF for some files)."""
     import io
 
-    import h5py
+    if data[:4] == b"\x89HDF":
+        import h5py
 
-    with h5py.File(io.BytesIO(data), "r") as f:
+        f = h5py.File(io.BytesIO(data), "r")  # netCDF4
+        get = lambda name: f[name]  # noqa: E731
+        has = lambda name: name in f  # noqa: E731
+    elif data[:3] == b"CDF":
+        from scipy.io import netcdf_file
+
+        f = netcdf_file(io.BytesIO(data), "r", mmap=False)
+        get = lambda name: f.variables[name]  # noqa: E731
+        has = lambda name: name in f.variables  # noqa: E731
+    else:
+        raise ValueError(f"not a netCDF file (starts with {data[:8]!r}, {len(data)} bytes)")
+    try:
         def var(*names: str) -> np.ndarray:
-            name = next(n for n in names if n in f)
-            d = f[name]
-            a = d[:].astype(np.float64)
+            name = next(n for n in names if has(n))
+            d = get(name)
+            a = np.array(d[:], dtype=np.float64)
+            attrs = d.attrs if hasattr(d, "attrs") else d._attributes
             for attr in ("_FillValue", "missing_value"):
-                if attr in d.attrs:
-                    a[a == float(np.asarray(d.attrs[attr]).ravel()[0])] = np.nan
-            if "scale_factor" in d.attrs:
-                a *= float(np.asarray(d.attrs["scale_factor"]).ravel()[0])
+                if attr in attrs:
+                    a[a == float(np.asarray(attrs[attr]).ravel()[0])] = np.nan
+            if "scale_factor" in attrs:
+                a *= float(np.asarray(attrs["scale_factor"]).ravel()[0])
             a[np.abs(a) > 1e10] = np.nan
             return a
 
@@ -129,25 +147,53 @@ def _read_nc(data: bytes) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarra
         pha = var("phase", "pha", "Phase")
         lat = var("lat", "latitude")
         lon = var("lon", "longitude")
+    finally:
+        f.close()
     if amp.shape != (len(lat), len(lon)):  # stored as [lon][lat]
         amp, pha = amp.T, pha.T
     return amp, pha, lat, lon
 
 
+def _nc_members(z: zipfile.ZipFile, depth: int = 0):
+    """(name, bytes reader) for every .nc file in the zip, also inside zips within it."""
+    for n in z.namelist():
+        low = n.lower()
+        base = low.rsplit("/", 1)[-1]
+        if "__macosx" in low or base.startswith("._"):  # macOS metadata files, not data
+            continue
+        if low.endswith(".nc"):
+            yield n, (lambda zz=z, nn=n: zz.read(nn))
+        elif low.endswith(".zip") and depth < 2:
+            import io
+
+            yield from _nc_members(zipfile.ZipFile(io.BytesIO(z.read(n))), depth + 1)
+
+
 def read_eot20(path: Path) -> dict[str, np.ndarray]:
     fields: dict[str, np.ndarray] = {}
     with zipfile.ZipFile(path) as z:
+        members = list(_nc_members(z))
         names = {}
-        for n in z.namelist():
-            m = re.search(r"ocean_tides/([0-9A-Za-z]+)_ocean_eot20\.nc$", n)
-            if m:
-                names[m.group(1).lower()] = n
+        for n, reader in members:
+            m = re.search(r"([0-9a-z]+)_ocean_eot20\.nc$", n.lower())
+            if m and "load" not in n.lower():
+                names[m.group(1)] = reader
         missing = [c for c in CONSTITUENTS if c not in names]
         if missing:
-            raise SystemExit(f"EOT20 zip lacks {missing}; found {sorted(names)}")
+            listing = [n for n, _ in members][:40] or z.namelist()[:40]
+            raise SystemExit(f"EOT20 zip lacks {missing}; files: {listing}")
+        raw = {}
+        bad = None
         for c in CONSTITUENTS:
-            amp, pha, lat, lon = _read_nc(z.read(names[c]))
-            log.info("%s: %s, max amplitude %.0f cm", c, amp.shape, np.nanmax(amp))
+            amp, pha, lat, lon = _read_nc(names[c]())
+            over = np.isfinite(amp) & (amp > MAX_AMPLITUDE_CM[c])
+            log.info("%s: %s, max amplitude %.0f cm, %d cells over %d cm", c, amp.shape, np.nanmax(amp), int(over.sum()), MAX_AMPLITUDE_CM[c])
+            bad = over if bad is None else bad | over
+            raw[c] = (amp, pha, lat, lon)
+        log.info("cells with unrealistic tides, left out: %d", int(bad.sum()))
+        for c in CONSTITUENTS:
+            amp, pha, lat, lon = raw.pop(c)
+            amp = np.where(bad, np.nan, amp)
             fields[f"{c}_re"], fields[f"{c}_im"] = to_grid(amp, pha, lat, lon)
     return fields
 

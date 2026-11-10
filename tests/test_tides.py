@@ -42,6 +42,21 @@ class Tides(unittest.TestCase):
         with zipfile.ZipFile(buf, "w") as z:
             for c in tides.CONSTITUENTS:
                 f = io.BytesIO()
+                if c == "k2":  # classic netCDF, as some EOT20 files are
+                    from scipy.io import netcdf_file
+
+                    nc = netcdf_file(f, "w")
+                    nc.createDimension("lat", len(lat))
+                    nc.createDimension("lon", len(lon))
+                    for name, arr, dims in (("lat", lat, ("lat",)), ("lon", lon, ("lon",)), ("amplitude", np.nan_to_num(amp * 0.1, nan=-999), ("lat", "lon")), ("phase", np.nan_to_num(pha, nan=-999), ("lat", "lon"))):
+                        v = nc.createVariable(name, "f4", dims)
+                        v[:] = arr
+                        if name in ("amplitude", "phase"):
+                            v._FillValue = np.float32(-999)
+                    nc.flush()
+                    z.writestr(f"EOT20/ocean_tides/{c.upper()}_ocean_eot20.nc", f.getvalue())
+                    nc.close()
+                    continue
                 with h5py.File(f, "w") as h:
                     k = 1.0 if c == "m2" else 0.1
                     h["amplitude"] = (amp * k).astype(np.float32)
@@ -63,6 +78,58 @@ class Tides(unittest.TestCase):
             self.assertEqual(block[tides.VARS.index("m2_im"), 0, i], 1000)
             self.assertEqual(block[tides.VARS.index("k1_im"), 0, i], 100)
             self.assertEqual(block[tides.VARS.index("m2_re"), 0, i], 0)
+            self.assertEqual(block[tides.VARS.index("k2_im"), 0, i], 100)  # from the classic netCDF file
+
+    def test_unrealistic_points_are_left_out(self):
+        amp, pha, lat, lon = eot_grid()
+        import h5py
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as z:
+            for c in tides.CONSTITUENTS:
+                a = amp * (1.0 if c == "m2" else 0.1)
+                if c == "s2":
+                    a = a.copy()
+                    a[np.ix_((lat > 15.3) & (lat < 15.7), (lon > 73.3) & (lon < 73.7))] = 3000  # 30 m: a bad value
+                f = io.BytesIO()
+                with h5py.File(f, "w") as h:
+                    h["amplitude"] = a.astype(np.float32)
+                    h["phase"] = pha.astype(np.float32)
+                    h["lat"] = lat
+                    h["lon"] = lon
+                z.writestr(f"EOT20/ocean_tides/{c.upper()}_ocean_eot20.nc", f.getvalue())
+        with tempfile.TemporaryDirectory() as d:
+            src = Path(d) / "eot20.zip"
+            src.write_bytes(buf.getvalue())
+            fields = tides.read_eot20(src)
+            self.assertTrue(np.isnan(fields["m2_im"][298, 294]))  # 15.5N 73.5E: S2 there is 30 m, so no tide
+            self.assertAlmostEqual(fields["m2_im"][298, 290], 1000)  # 72.5E: fine
+
+
+    def test_zip_inside_zip(self):
+        amp, pha, lat, lon = eot_grid()
+        import h5py
+
+        inner = io.BytesIO()
+        with zipfile.ZipFile(inner, "w") as z:
+            for c in tides.CONSTITUENTS:
+                f = io.BytesIO()
+                with h5py.File(f, "w") as h:
+                    h["amplitude"] = (amp * (1.0 if c == "m2" else 0.1)).astype(np.float32)
+                    h["phase"] = pha.astype(np.float32)
+                    h["lat"] = lat
+                    h["lon"] = lon
+                z.writestr(f"ocean_tides/{c.upper()}_ocean_eot20.nc", f.getvalue())
+                z.writestr(f"load_tides/{c.upper()}_load_eot20.nc", b"not read")
+                z.writestr(f"__MACOSX/ocean_tides/._{c.upper()}_ocean_eot20.nc", b"mac metadata")
+        outer = io.BytesIO()
+        with zipfile.ZipFile(outer, "w") as z:
+            z.writestr("EOT20/ocean_tides.zip", inner.getvalue())
+        with tempfile.TemporaryDirectory() as d:
+            src = Path(d) / "eot20.zip"
+            src.write_bytes(outer.getvalue())
+            fields = tides.read_eot20(src)
+            self.assertAlmostEqual(fields["m2_im"][298, 294], 1000)
 
 
 if __name__ == "__main__":
