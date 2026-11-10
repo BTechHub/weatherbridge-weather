@@ -63,3 +63,39 @@ def upload_places(path: Path) -> None:
     base = url.rsplit("/weather", 1)[0]  # .../weatherbridge/ingest
     res = _call("PUT", f"{base}/places", {**h, "Content-Type": "application/octet-stream"}, data=path.read_bytes()).json()
     log.info("places upload: %s", res)
+
+
+# --- Map layers (satellite, radar): one packed frame per upload, sent in parts of at most 6 MB. ---
+
+SKY_PART_BYTES = 6 * 1024 * 1024
+
+
+def _sky_base() -> tuple[str, dict]:
+    url, h = _base()
+    return url.rsplit("/weather", 1)[0] + "/sky", h  # .../weatherbridge/ingest/sky
+
+
+def frame_id(t) -> str:
+    return t.strftime("%Y%m%d%H%M")
+
+
+def sky_frame_live(layer: str, t) -> bool:
+    url, h = _sky_base()
+    frames = _call("GET", f"{url}/status", h).json().get("layers", {}).get(layer, [])
+    return any(f.get("id") == frame_id(t) for f in frames)
+
+
+def upload_sky(layer: str, t, data: bytes) -> None:
+    import hashlib
+
+    url, h = _sky_base()
+    fid = frame_id(t)
+    oh = {**h, "Content-Type": "application/octet-stream"}
+    parts = [data[i : i + SKY_PART_BYTES] for i in range(0, len(data), SKY_PART_BYTES)]
+    t0 = time.time()
+    for n, part in enumerate(parts):
+        _call("PUT", f"{url}/{layer}/{fid}/parts/{n}", oh, data=part)
+    res = _call(
+        "POST", f"{url}/{layer}/{fid}/finish", h, json={"parts": len(parts), "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+    ).json()
+    log.info("%s frame %s: %.1f MB in %d parts, %.0fs: %s", layer, fid, len(data) / 1e6, len(parts), time.time() - t0, res)

@@ -1,0 +1,42 @@
+name: satellite-map
+
+# Once an hour: the world infrared cloud map for the app's Map tab (wbwx/satellite.py). Uses the image of the
+# previous full hour, at least 65 minutes old, which is when EUMETSAT's Meteosat images are open data (CC BY 4.0).
+# Needs WB_WEATHER_INGEST_TOKEN, and EUMETSAT_CONSUMER_KEY / EUMETSAT_CONSUMER_SECRET (a free EUMETSAT account)
+# for India, Europe and Africa; without them those areas are left out of the map.
+on:
+  schedule:
+    - cron: "12 * * * *"
+  workflow_dispatch:
+    inputs:
+      time:
+        description: "Frame time to make again, e.g. 2026-11-10T14:00Z (empty: the newest)"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: satellite-map
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      WB_WEATHER_INGEST_URL: https://api.lorjova.com/weatherbridge/ingest/weather
+      WB_WEATHER_INGEST_TOKEN: ${{ secrets.WB_WEATHER_INGEST_TOKEN }}
+      EUMETSAT_CONSUMER_KEY: ${{ secrets.EUMETSAT_CONSUMER_KEY }}
+      EUMETSAT_CONSUMER_SECRET: ${{ secrets.EUMETSAT_CONSUMER_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - run: pip install -r requirements.txt "satpy[abi_l1b,seviri_l1b_native]>=0.55" h5netcdf "eumdac>=3,<4"
+      - run: python -m unittest tests.test_sky
+      - run: python -m wbwx.satellite --out "$RUNNER_TEMP/satellite" --publish ${{ inputs.time && format('--time {0}', inputs.time) || '' }}

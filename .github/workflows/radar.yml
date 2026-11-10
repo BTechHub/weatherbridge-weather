@@ -1,0 +1,41 @@
+name: radar-map
+
+# Every 15 minutes: rain radar for the USA (NOAA MRMS) and Europe (EUMETNET OPERA) for the app's Map tab
+# (wbwx/radar.py). Needs WB_WEATHER_INGEST_TOKEN. GitHub may start scheduled runs a few minutes late.
+on:
+  schedule:
+    - cron: "4,19,34,49 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write # keep-alive below
+
+concurrency:
+  group: radar-map
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 14
+    env:
+      WB_WEATHER_INGEST_URL: https://api.lorjova.com/weatherbridge/ingest/weather
+      WB_WEATHER_INGEST_TOKEN: ${{ secrets.WB_WEATHER_INGEST_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - run: pip install -r requirements.txt
+      - run: python -m wbwx.radar --out "$RUNNER_TEMP/radar" --publish
+      # GitHub pauses scheduled workflows in a repo with no activity for 60 days; re-enabling keeps them running.
+      - name: Keep the schedules alive
+        if: ${{ !cancelled() && github.event_name == 'schedule' && github.run_number % 96 == 0 }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api -X PUT "repos/${{ github.repository }}/actions/workflows/radar.yml/enable"
+          gh api -X PUT "repos/${{ github.repository }}/actions/workflows/satellite.yml/enable"
