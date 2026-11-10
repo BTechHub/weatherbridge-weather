@@ -34,6 +34,11 @@ CONSTITUENTS = ("2n2", "j1", "k1", "k2", "m2", "m4", "mf", "mm", "n2", "o1", "p1
 # A fixed "cycle" (2021-01-01, the EOT20 release year): the map does not change between runs.
 CYCLE = 1_609_459_200
 VARS = [f"{c}_{part}" for c in CONSTITUENTS for part in ("re", "im")]
+# Largest believable amplitude per constituent, cm (the Bay of Fundy has the world's biggest tides: M2 about
+# 5 m). EOT20 has unrealistic values in a few shallow river mouths (St Lawrence, Amazon: S2 above 30 m);
+# a point where any constituent is above its limit gets no tide rather than a wrong one.
+MAX_AMPLITUDE_CM = {"2n2": 40, "j1": 25, "k1": 300, "k2": 80, "m2": 600, "m4": 100, "mf": 30, "mm": 40, "n2": 130,
+                    "o1": 200, "p1": 100, "q1": 40, "s1": 20, "s2": 250, "sa": 50, "ssa": 20, "t2": 20}
 
 
 def grid_positions() -> tuple[np.ndarray, np.ndarray]:
@@ -177,13 +182,18 @@ def read_eot20(path: Path) -> dict[str, np.ndarray]:
         if missing:
             listing = [n for n, _ in members][:40] or z.namelist()[:40]
             raise SystemExit(f"EOT20 zip lacks {missing}; files: {listing}")
+        raw = {}
+        bad = None
         for c in CONSTITUENTS:
             amp, pha, lat, lon = _read_nc(names[c]())
-            log.info("%s: %s, max amplitude %.0f cm, 99.9%% %.0f cm", c, amp.shape, np.nanmax(amp), np.nanpercentile(amp, 99.9))
-            flat = np.where(np.isfinite(amp), amp, -1).ravel()
-            for k in np.argsort(flat)[-6:][::-1]:
-                r, q = divmod(int(k), amp.shape[1])
-                log.info("  %s top: %.0f cm at %.3f, %.3f", c, flat[k], lat[r], lon[q])
+            over = np.isfinite(amp) & (amp > MAX_AMPLITUDE_CM[c])
+            log.info("%s: %s, max amplitude %.0f cm, %d cells over %d cm", c, amp.shape, np.nanmax(amp), int(over.sum()), MAX_AMPLITUDE_CM[c])
+            bad = over if bad is None else bad | over
+            raw[c] = (amp, pha, lat, lon)
+        log.info("cells with unrealistic tides, left out: %d", int(bad.sum()))
+        for c in CONSTITUENTS:
+            amp, pha, lat, lon = raw.pop(c)
+            amp = np.where(bad, np.nan, amp)
             fields[f"{c}_re"], fields[f"{c}_im"] = to_grid(amp, pha, lat, lon)
     return fields
 
