@@ -33,9 +33,12 @@ jobs:
       - run: python -m wbwx.radar --out "$RUNNER_TEMP/radar" --publish
       # GitHub pauses scheduled workflows in a repo with no activity for 60 days; re-enabling keeps them running.
       - name: Keep the schedules alive
-        if: ${{ !cancelled() && github.event_name == 'schedule' && github.run_number % 96 == 0 }}
+        if: ${{ !cancelled() && github.event_name == 'schedule' }}
         env:
           GH_TOKEN: ${{ github.token }}
+          RUN_NUMBER: ${{ github.run_number }}
+        # About once a day (every 96th run); expressions have no %, so the shell decides.
         run: |
+          [ $((RUN_NUMBER % 96)) -eq 0 ] || exit 0
           gh api -X PUT "repos/${{ github.repository }}/actions/workflows/radar.yml/enable"
           gh api -X PUT "repos/${{ github.repository }}/actions/workflows/satellite.yml/enable"
