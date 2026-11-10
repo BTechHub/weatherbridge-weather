@@ -179,7 +179,11 @@ def read_eot20(path: Path) -> dict[str, np.ndarray]:
             raise SystemExit(f"EOT20 zip lacks {missing}; files: {listing}")
         for c in CONSTITUENTS:
             amp, pha, lat, lon = _read_nc(names[c]())
-            log.info("%s: %s, max amplitude %.0f cm", c, amp.shape, np.nanmax(amp))
+            log.info("%s: %s, max amplitude %.0f cm, 99.9%% %.0f cm", c, amp.shape, np.nanmax(amp), np.nanpercentile(amp, 99.9))
+            flat = np.where(np.isfinite(amp), amp, -1).ravel()
+            for k in np.argsort(flat)[-6:][::-1]:
+                r, q = divmod(int(k), amp.shape[1])
+                log.info("  %s top: %.0f cm at %.3f, %.3f", c, flat[k], lat[r], lon[q])
             fields[f"{c}_re"], fields[f"{c}_im"] = to_grid(amp, pha, lat, lon)
     return fields
 
