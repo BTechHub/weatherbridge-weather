@@ -1,0 +1,39 @@
+name: satellite-map
+
+# Once an hour: the world infrared cloud map for the app's Map tab (wbwx/satellite.py), from GOES-East, GOES-West
+# and Himawari on AWS (NOAA open data). Runs 40 minutes past the hour, for that hour's images. Needs
+# WB_WEATHER_INGEST_TOKEN. EUMETSAT Meteosat is not used: its Data Store licence forbids commercial use.
+on:
+  schedule:
+    - cron: "40 * * * *"
+  workflow_dispatch:
+    inputs:
+      time:
+        description: "Frame time to make again, e.g. 2026-11-10T14:00Z (empty: the newest)"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: satellite-map
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      WB_WEATHER_INGEST_URL: https://api.lorjova.com/weatherbridge/ingest/weather
+      WB_WEATHER_INGEST_TOKEN: ${{ secrets.WB_WEATHER_INGEST_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - run: pip install -r requirements.txt "satpy[abi_l1b]>=0.55" h5netcdf
+      - run: python -m unittest tests.test_sky
+      - run: python -m wbwx.satellite --out "$RUNNER_TEMP/satellite" --publish ${{ inputs.time && format('--time {0}', inputs.time) || '' }}
