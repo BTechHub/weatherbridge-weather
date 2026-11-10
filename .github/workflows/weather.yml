@@ -46,7 +46,9 @@ jobs:
         if: ${{ !cancelled() }}
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/weather.yml/enable"
+        run: |
+          gh api -X PUT "repos/${{ github.repository }}/actions/workflows/weather.yml/enable"
+          gh api -X PUT "repos/${{ github.repository }}/actions/workflows/ocean.yml/enable"
       # Fails the run (GitHub then emails) if the API is not serving a fresh run of both datasets.
       - name: Check the API is up to date
         if: ${{ !cancelled() && github.event_name == 'schedule' }}
