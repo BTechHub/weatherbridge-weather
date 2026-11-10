@@ -89,7 +89,11 @@ def read_etopo(path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     import h5py
 
     with h5py.File(path, "r") as f:
-        return f["z"][:], f["lat"][:], f["lon"][:]
+        name = next(n for n in ("z", "Band1", "elevation") if n in f)
+        lat = next(n for n in ("lat", "latitude", "y") if n in f)
+        lon = next(n for n in ("lon", "longitude", "x") if n in f)
+        # sample() works from the first value and the spacing, so either latitude order is fine.
+        return f[name][:], f[lat][:], f[lon][:]
 
 
 def main(argv: list[str] | None = None) -> int:
