@@ -65,5 +65,30 @@ class Tides(unittest.TestCase):
             self.assertEqual(block[tides.VARS.index("m2_re"), 0, i], 0)
 
 
+    def test_zip_inside_zip(self):
+        amp, pha, lat, lon = eot_grid()
+        import h5py
+
+        inner = io.BytesIO()
+        with zipfile.ZipFile(inner, "w") as z:
+            for c in tides.CONSTITUENTS:
+                f = io.BytesIO()
+                with h5py.File(f, "w") as h:
+                    h["amplitude"] = amp.astype(np.float32)
+                    h["phase"] = pha.astype(np.float32)
+                    h["lat"] = lat
+                    h["lon"] = lon
+                z.writestr(f"ocean_tides/{c.upper()}_ocean_eot20.nc", f.getvalue())
+                z.writestr(f"load_tides/{c.upper()}_load_eot20.nc", b"not read")
+        outer = io.BytesIO()
+        with zipfile.ZipFile(outer, "w") as z:
+            z.writestr("EOT20/ocean_tides.zip", inner.getvalue())
+        with tempfile.TemporaryDirectory() as d:
+            src = Path(d) / "eot20.zip"
+            src.write_bytes(outer.getvalue())
+            fields = tides.read_eot20(src)
+            self.assertAlmostEqual(fields["m2_im"][298, 294], 1000)
+
+
 if __name__ == "__main__":
     unittest.main()

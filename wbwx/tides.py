@@ -134,19 +134,33 @@ def _read_nc(data: bytes) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarra
     return amp, pha, lat, lon
 
 
+def _nc_members(z: zipfile.ZipFile, depth: int = 0):
+    """(name, bytes reader) for every .nc file in the zip, also inside zips within it."""
+    for n in z.namelist():
+        low = n.lower()
+        if low.endswith(".nc"):
+            yield n, (lambda zz=z, nn=n: zz.read(nn))
+        elif low.endswith(".zip") and depth < 2:
+            import io
+
+            yield from _nc_members(zipfile.ZipFile(io.BytesIO(z.read(n))), depth + 1)
+
+
 def read_eot20(path: Path) -> dict[str, np.ndarray]:
     fields: dict[str, np.ndarray] = {}
     with zipfile.ZipFile(path) as z:
+        members = list(_nc_members(z))
         names = {}
-        for n in z.namelist():
-            m = re.search(r"ocean_tides/([0-9A-Za-z]+)_ocean_eot20\.nc$", n)
-            if m:
-                names[m.group(1).lower()] = n
+        for n, reader in members:
+            m = re.search(r"([0-9a-z]+)_ocean_eot20\.nc$", n.lower())
+            if m and "load" not in n.lower():
+                names[m.group(1)] = reader
         missing = [c for c in CONSTITUENTS if c not in names]
         if missing:
-            raise SystemExit(f"EOT20 zip lacks {missing}; found {sorted(names)}")
+            listing = [n for n, _ in members][:40] or z.namelist()[:40]
+            raise SystemExit(f"EOT20 zip lacks {missing}; files: {listing}")
         for c in CONSTITUENTS:
-            amp, pha, lat, lon = _read_nc(z.read(names[c]))
+            amp, pha, lat, lon = _read_nc(names[c]())
             log.info("%s: %s, max amplitude %.0f cm", c, amp.shape, np.nanmax(amp))
             fields[f"{c}_re"], fields[f"{c}_im"] = to_grid(amp, pha, lat, lon)
     return fields
