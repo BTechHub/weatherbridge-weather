@@ -42,6 +42,21 @@ class Tides(unittest.TestCase):
         with zipfile.ZipFile(buf, "w") as z:
             for c in tides.CONSTITUENTS:
                 f = io.BytesIO()
+                if c == "k2":  # classic netCDF, as some EOT20 files are
+                    from scipy.io import netcdf_file
+
+                    nc = netcdf_file(f, "w")
+                    nc.createDimension("lat", len(lat))
+                    nc.createDimension("lon", len(lon))
+                    for name, arr, dims in (("lat", lat, ("lat",)), ("lon", lon, ("lon",)), ("amplitude", np.nan_to_num(amp * 0.1, nan=-999), ("lat", "lon")), ("phase", np.nan_to_num(pha, nan=-999), ("lat", "lon"))):
+                        v = nc.createVariable(name, "f4", dims)
+                        v[:] = arr
+                        if name in ("amplitude", "phase"):
+                            v._FillValue = np.float32(-999)
+                    nc.flush()
+                    z.writestr(f"EOT20/ocean_tides/{c.upper()}_ocean_eot20.nc", f.getvalue())
+                    nc.close()
+                    continue
                 with h5py.File(f, "w") as h:
                     k = 1.0 if c == "m2" else 0.1
                     h["amplitude"] = (amp * k).astype(np.float32)
@@ -63,6 +78,7 @@ class Tides(unittest.TestCase):
             self.assertEqual(block[tides.VARS.index("m2_im"), 0, i], 1000)
             self.assertEqual(block[tides.VARS.index("k1_im"), 0, i], 100)
             self.assertEqual(block[tides.VARS.index("m2_re"), 0, i], 0)
+            self.assertEqual(block[tides.VARS.index("k2_im"), 0, i], 100)  # from the classic netCDF file
 
 
     def test_zip_inside_zip(self):

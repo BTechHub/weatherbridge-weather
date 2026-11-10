@@ -107,21 +107,32 @@ def build(fields: dict[str, np.ndarray], out: Path) -> Path:
 
 
 def _read_nc(data: bytes) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """amplitude, phase, lat, lon from one EOT20 file (netCDF4 = HDF5)."""
+    """amplitude, phase, lat, lon from one EOT20 file (netCDF4/HDF5, or classic netCDF for some files)."""
     import io
 
-    import h5py
+    if data[:4] == b"\x89HDF":
+        import h5py
 
-    with h5py.File(io.BytesIO(data), "r") as f:
+        f = h5py.File(io.BytesIO(data), "r")
+        get = lambda name: f[name]  # noqa: E731
+        has = lambda name: name in f  # noqa: E731
+    else:
+        from scipy.io import netcdf_file
+
+        f = netcdf_file(io.BytesIO(data), "r", mmap=False)
+        get = lambda name: f.variables[name]  # noqa: E731
+        has = lambda name: name in f.variables  # noqa: E731
+    try:
         def var(*names: str) -> np.ndarray:
-            name = next(n for n in names if n in f)
-            d = f[name]
-            a = d[:].astype(np.float64)
+            name = next(n for n in names if has(n))
+            d = get(name)
+            a = np.array(d[:], dtype=np.float64)
+            attrs = d.attrs if hasattr(d, "attrs") else d._attributes
             for attr in ("_FillValue", "missing_value"):
-                if attr in d.attrs:
-                    a[a == float(np.asarray(d.attrs[attr]).ravel()[0])] = np.nan
-            if "scale_factor" in d.attrs:
-                a *= float(np.asarray(d.attrs["scale_factor"]).ravel()[0])
+                if attr in attrs:
+                    a[a == float(np.asarray(attrs[attr]).ravel()[0])] = np.nan
+            if "scale_factor" in attrs:
+                a *= float(np.asarray(attrs["scale_factor"]).ravel()[0])
             a[np.abs(a) > 1e10] = np.nan
             return a
 
@@ -129,6 +140,8 @@ def _read_nc(data: bytes) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarra
         pha = var("phase", "pha", "Phase")
         lat = var("lat", "latitude")
         lon = var("lon", "longitude")
+    finally:
+        f.close()
     if amp.shape != (len(lat), len(lon)):  # stored as [lon][lat]
         amp, pha = amp.T, pha.T
     return amp, pha, lat, lon
