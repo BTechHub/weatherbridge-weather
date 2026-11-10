@@ -13,7 +13,8 @@ Licences: NOAA and JMA data via NOAA's open data programme (free, attribution re
 data is "Core" data under CC BY 4.0 only when it is an hourly image or at least an hour old, so we only ever
 use the image of the full hour, at least 65 minutes after it was taken, and never anything newer. Credit:
 "Contains modified EUMETSAT Meteosat data <year>". Meteosat needs a free EUMETSAT account:
-EUMETSAT_CONSUMER_KEY and EUMETSAT_CONSUMER_SECRET (without them the map leaves those areas out).
+EUMETSAT_CONSUMER_KEY and EUMETSAT_CONSUMER_SECRET, and is used only when WB_USE_METEOSAT=1. It is off for now:
+the Data Store licence offered to the account forbids commercial use, so we wait for EUMETSAT's written answer.
 
 The frame is web map tiles 0..5 (about 5 km a pixel at the equator) packed into one file and uploaded as the
 layer "satellite" (wbwx/maptiles.py, API docs/WEATHERBRIDGE_WEATHER.md in the lorjova repo).
@@ -279,7 +280,18 @@ def tiles_from_canvas(canvas: np.ndarray, max_zoom: int = MAX_ZOOM, quality: int
     return out
 
 
-CREDIT = "NOAA GOES, JMA Himawari (via NOAA), contains modified EUMETSAT Meteosat data {year}"
+CREDIT = "NOAA GOES, JMA Himawari (via NOAA)"
+CREDIT_METEOSAT = ", contains modified EUMETSAT Meteosat data {year}"
+
+
+def meteosat_allowed() -> bool:
+    """Meteosat stays off until EUMETSAT confirms in writing that the account's licence allows a paid app.
+
+    The Data Store licence offered to the account on 2026-11-10 ("Meteosat > 1 hr latency") says no operational or
+    commercial use and no redistribution, which conflicts with the CC BY 4.0 open data policy, so we wait.
+    Set WB_USE_METEOSAT=1 only once that is settled.
+    """
+    return os.environ.get("WB_USE_METEOSAT") == "1"
 
 
 def frame_time(now: dt.datetime) -> dt.datetime:
@@ -294,9 +306,10 @@ def build(t: dt.datetime, work: Path) -> tuple[bytes, list[str]]:
         "goes-east": lambda: goes(19, t, work),
         "goes-west": lambda: goes(18, t, work),
         "himawari": lambda: himawari(t, work),
-        "meteosat-iodc": lambda: meteosat(METEOSAT["meteosat-iodc"], t, work),
-        "meteosat-0": lambda: meteosat(METEOSAT["meteosat-0"], t, work),
     }
+    if meteosat_allowed():
+        jobs["meteosat-iodc"] = lambda: meteosat(METEOSAT["meteosat-iodc"], t, work)
+        jobs["meteosat-0"] = lambda: meteosat(METEOSAT["meteosat-0"], t, work)
     views, used = [], []
     for name, fetch in jobs.items():
         t0 = time.time()
@@ -317,7 +330,8 @@ def build(t: dt.datetime, work: Path) -> tuple[bytes, list[str]]:
     tiles = tiles_from_canvas(canvas)
     log.info("drew %d tiles in %.0fs", len(tiles), time.time() - t0)
     iso = t.strftime("%Y-%m-%dT%H:%MZ")
-    return maptiles.pack(LAYER, iso, tiles, 0, MAX_ZOOM, CREDIT.format(year=t.year)), used
+    credit = CREDIT + (CREDIT_METEOSAT.format(year=t.year) if any(u.startswith("meteosat") for u in used) else "")
+    return maptiles.pack(LAYER, iso, tiles, 0, MAX_ZOOM, credit), used
 
 
 def main() -> None:

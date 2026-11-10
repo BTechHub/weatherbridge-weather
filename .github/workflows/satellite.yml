@@ -2,8 +2,10 @@ name: satellite-map
 
 # Once an hour: the world infrared cloud map for the app's Map tab (wbwx/satellite.py). Uses the image of the
 # previous full hour, at least 65 minutes old, which is when EUMETSAT's Meteosat images are open data (CC BY 4.0).
-# Needs WB_WEATHER_INGEST_TOKEN, and EUMETSAT_CONSUMER_KEY / EUMETSAT_CONSUMER_SECRET (a free EUMETSAT account)
-# for India, Europe and Africa; without them those areas are left out of the map.
+# Needs WB_WEATHER_INGEST_TOKEN. Meteosat (India, Europe, Africa) is used only when the repository variable
+# WB_USE_METEOSAT is 1, plus EUMETSAT_CONSUMER_KEY / EUMETSAT_CONSUMER_SECRET; it stays off until EUMETSAT confirms
+# in writing that the account's licence allows use in a paid app. Without it those areas come from Himawari and GOES
+# where they reach, and are left out elsewhere.
 on:
   schedule:
     - cron: "12 * * * *"
@@ -30,6 +32,7 @@ jobs:
       WB_WEATHER_INGEST_TOKEN: ${{ secrets.WB_WEATHER_INGEST_TOKEN }}
       EUMETSAT_CONSUMER_KEY: ${{ secrets.EUMETSAT_CONSUMER_KEY }}
       EUMETSAT_CONSUMER_SECRET: ${{ secrets.EUMETSAT_CONSUMER_SECRET }}
+      WB_USE_METEOSAT: ${{ vars.WB_USE_METEOSAT }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

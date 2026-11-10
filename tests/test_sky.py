@@ -1,7 +1,9 @@
 import datetime as dt
 import io
 import math
+import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
 import h5py
@@ -111,6 +113,26 @@ class Satellite(unittest.TestCase):
             satellite.meteosat("x", dt.datetime(2026, 11, 10, 14, 0, tzinfo=dt.timezone.utc), None, now=now)  # 64 minutes old
         with self.assertRaises(ValueError):
             satellite.meteosat("x", dt.datetime(2026, 11, 10, 13, 15, tzinfo=dt.timezone.utc), None, now=now)  # not a full hour
+
+    def test_meteosat_is_off_unless_switched_on(self):
+        with mock.patch.dict("os.environ", {}, clear=True):
+            self.assertFalse(satellite.meteosat_allowed())
+        with mock.patch.dict("os.environ", {"WB_USE_METEOSAT": "1"}):
+            self.assertTrue(satellite.meteosat_allowed())
+        t = dt.datetime(2026, 11, 10, 14, 0, tzinfo=dt.timezone.utc)
+        area = FakeArea(-180, 90, 1.0, (180, 360))
+        fake = lambda name, files: satellite.View(name, 0.0, np.full((180, 360), 220.0, dtype=np.float32), area)
+        with mock.patch.dict("os.environ", {}, clear=True), \
+                mock.patch.object(satellite, "goes", return_value=[]), mock.patch.object(satellite, "himawari", return_value=[]), \
+                mock.patch.object(satellite, "meteosat") as met, mock.patch.object(satellite, "read", side_effect=fake), \
+                mock.patch.object(satellite, "world_canvas", return_value=np.full((64, 64), 220.0, dtype=np.float32)), \
+                mock.patch.object(satellite, "tiles_from_canvas", return_value={"0/0/0": b"x"}):
+            with tempfile.TemporaryDirectory() as work:
+                data, used = satellite.build(t, Path(work))
+        met.assert_not_called()
+        self.assertEqual(used, ["goes-east", "goes-west", "himawari"])
+        header, _ = maptiles.unpack(data)
+        self.assertNotIn("EUMETSAT", header["credit"])
 
     def test_canvas_and_tiles(self):
         area = FakeArea(-180, 90, 1.0, (180, 360))
