@@ -113,15 +113,17 @@ def _read_nc(data: bytes) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarra
     if data[:4] == b"\x89HDF":
         import h5py
 
-        f = h5py.File(io.BytesIO(data), "r")
+        f = h5py.File(io.BytesIO(data), "r")  # netCDF4
         get = lambda name: f[name]  # noqa: E731
         has = lambda name: name in f  # noqa: E731
-    else:
+    elif data[:3] == b"CDF":
         from scipy.io import netcdf_file
 
         f = netcdf_file(io.BytesIO(data), "r", mmap=False)
         get = lambda name: f.variables[name]  # noqa: E731
         has = lambda name: name in f.variables  # noqa: E731
+    else:
+        raise ValueError(f"not a netCDF file (starts with {data[:8]!r}, {len(data)} bytes)")
     try:
         def var(*names: str) -> np.ndarray:
             name = next(n for n in names if has(n))
@@ -151,6 +153,9 @@ def _nc_members(z: zipfile.ZipFile, depth: int = 0):
     """(name, bytes reader) for every .nc file in the zip, also inside zips within it."""
     for n in z.namelist():
         low = n.lower()
+        base = low.rsplit("/", 1)[-1]
+        if "__macosx" in low or base.startswith("._"):  # macOS metadata files, not data
+            continue
         if low.endswith(".nc"):
             yield n, (lambda zz=z, nn=n: zz.read(nn))
         elif low.endswith(".zip") and depth < 2:

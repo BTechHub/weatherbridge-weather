@@ -96,6 +96,7 @@ class Tides(unittest.TestCase):
                     h["lon"] = lon
                 z.writestr(f"ocean_tides/{c.upper()}_ocean_eot20.nc", f.getvalue())
                 z.writestr(f"load_tides/{c.upper()}_load_eot20.nc", b"not read")
+                z.writestr(f"__MACOSX/ocean_tides/._{c.upper()}_ocean_eot20.nc", b"mac metadata")
         outer = io.BytesIO()
         with zipfile.ZipFile(outer, "w") as z:
             z.writestr("EOT20/ocean_tides.zip", inner.getvalue())
