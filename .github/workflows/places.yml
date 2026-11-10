@@ -1,0 +1,28 @@
+name: places
+
+# Weekly: the app's place search list from GeoNames (CC BY 4.0), uploaded to the API.
+on:
+  schedule:
+    - cron: "10 3 * * 0"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      WB_WEATHER_INGEST_URL: https://api.lorjova.com/weatherbridge/ingest/weather
+      WB_WEATHER_INGEST_TOKEN: ${{ secrets.WB_WEATHER_INGEST_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - run: pip install -r requirements.txt
+      - run: python -m unittest
+      - run: python -m wbwx.places --out "$RUNNER_TEMP/places" --publish

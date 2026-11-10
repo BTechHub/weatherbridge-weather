@@ -55,3 +55,11 @@ def upload(run_dir: Path, workers: int = 6) -> None:
         list(pool.map(put, manifest["tiles"]))
     res = _call("POST", f"{url}/runs/{run_id}/finish", h, json={"tiles": len(manifest["tiles"])}).json()
     log.info("upload done in %.0fs: %s", time.time() - t0, res)
+
+
+def upload_places(path: Path) -> None:
+    """The place list goes up in one request; the API swaps it in at once."""
+    url, h = _base()
+    base = url.rsplit("/weather", 1)[0]  # .../weatherbridge/ingest
+    res = _call("PUT", f"{base}/places", {**h, "Content-Type": "application/octet-stream"}, data=path.read_bytes()).json()
+    log.info("places upload: %s", res)
