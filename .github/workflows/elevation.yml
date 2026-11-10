@@ -1,0 +1,32 @@
+name: elevation-map
+
+# One-off (run again only if the map changes): builds the real ground height map from NOAA ETOPO 2022
+# and uploads it, so the API can correct temperatures in mountain and valley towns.
+on:
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Upload again even if the map is already live"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      WB_WEATHER_INGEST_URL: https://api.lorjova.com/weatherbridge/ingest/weather
+      WB_WEATHER_INGEST_TOKEN: ${{ secrets.WB_WEATHER_INGEST_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - run: pip install -r requirements.txt
+      - run: python -m unittest
+      - run: python -m wbwx.elevation --out "$RUNNER_TEMP/elevation" --publish ${{ inputs.force && '--force' || '' }}

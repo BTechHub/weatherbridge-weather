@@ -74,6 +74,8 @@ GFS = Dataset(
         Var("snow", "CSNOW:surface", 1),
         Var("freezing_rain", "CFRZR:surface", 1),
         Var("land", "LAND:surface", 1),
+        # The model's ground height; the API moves temperature from it to the real height (wbwx/elevation.py).
+        Var("orography", "HGT:surface", 1),
         # Rate in mm/h over the interval that ends at this step, from the APCP accumulations.
         Var("precipitation", "APCP:surface", 10, kind="acc"),
         # Apparent temperature and dew point are worked out by the API from temperature, humidity and wind.
