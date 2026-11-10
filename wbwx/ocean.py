@@ -32,6 +32,7 @@ log = logging.getLogger("wbwx.ocean")
 DATASET_ID = "cmems_mod_glo_phy_anfc_0.083deg_PT1H-m"
 STEP_HOURS = 3
 MAX_DAYS = 11
+BATCH_STEPS = 8  # one day of 3-hourly steps per read
 VARS = (("current_u", 100), ("current_v", 100), ("sst", 100))
 
 
@@ -132,16 +133,20 @@ def fetch(out: Path, force: bool, publish_it: bool) -> int:
     fields = {name: np.full((len(pick), TILE_ROWS * TILE, TILE_COLS * TILE), MISSING, dtype=np.int16) for name, _ in VARS}
     scales = dict(VARS)
     t0 = time.time()
-    for k, i in enumerate(pick):
+    # Read a day of steps per variable in one request: the remote store is chunked over several hours, so
+    # reading one time stamp at a time downloads the same chunk again for every step.
+    for b in range(0, len(pick), BATCH_STEPS):
+        ks = list(range(b, min(b + BATCH_STEPS, len(pick))))
         for name, src in names.items():
-            da = ds[src].isel(time=i)
+            da = ds[src].isel(time=[pick[k] for k in ks])
             if "depth" in da.dims:
                 da = da.isel(depth=0)
-            a = np.asarray(da.values, dtype=np.float64)
-            if a.shape != (ds.sizes[lat_name], ds.sizes[lon_name]):
-                a = a.T
-            fields[name][k] = quantize(regrid(a), scales[name])
-        log.info("step %d/%d (+%d h) done, %.0fs", k + 1, len(pick), steps[k], time.time() - t0)
+            da = da.transpose("time", lat_name, lon_name)
+            block = np.asarray(da.values, dtype=np.float32)
+            for j, k in enumerate(ks):
+                fields[name][k] = quantize(regrid(block[j].astype(np.float64)), scales[name])
+            del block
+        log.info("steps %d-%d of %d (to +%d h) done, %.0fs", ks[0] + 1, ks[-1] + 1, len(pick), steps[ks[-1]], time.time() - t0)
     title = f"Copernicus Marine global ocean physics forecast ({u_name}/{v_name}, thetao)"
     build(fields, first, steps, out, title)
     if publish_it:
