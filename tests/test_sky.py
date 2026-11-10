@@ -79,21 +79,21 @@ class FakeArea:
 class Satellite(unittest.TestCase):
     def test_each_place_comes_from_the_satellite_that_sees_it_best(self):
         area = FakeArea(-180, 90, 1.0, (180, 360))
-        india = satellite.View("meteosat-iodc", 45.5, np.full((180, 360), 230.0, dtype=np.float32), area)
+        india = satellite.View("sat-45e", 45.5, np.full((180, 360), 230.0, dtype=np.float32), area)
         japan = satellite.View("himawari", 140.7, np.full((180, 360), 260.0, dtype=np.float32), area)
         lon = np.array([[73.0, 120.0, 93.0, -100.0]])
         lat = np.array([[19.0, 30.0, 0.0, 0.0]])
         bt = satellite.composite([india, japan], lon, lat)
-        self.assertEqual(bt[0, 0], 230.0)  # Mumbai: Meteosat-9
+        self.assertEqual(bt[0, 0], 230.0)  # Mumbai: the 45.5E satellite
         self.assertEqual(bt[0, 1], 260.0)  # Shanghai: Himawari
-        self.assertEqual(bt[0, 2], 230.0)  # 93E: 47.5 degrees from Meteosat-9, 47.7 from Himawari
+        self.assertEqual(bt[0, 2], 230.0)  # 93E: 47.5 degrees from 45.5E, 47.7 from Himawari
         self.assertTrue(np.isnan(bt[0, 3]))  # Pacific off Mexico: neither sees it
 
     def test_a_gap_in_the_best_satellite_is_filled_by_the_next(self):
         area = FakeArea(-180, 90, 1.0, (180, 360))
         bt = np.full((180, 360), 230.0, dtype=np.float32)
-        bt[70, 253] = np.nan  # Mumbai's pixel missing in Meteosat-9
-        india = satellite.View("meteosat-iodc", 45.5, bt, area)
+        bt[70, 253] = np.nan  # Mumbai's pixel missing in the 45.5E view
+        india = satellite.View("sat-45e", 45.5, bt, area)
         japan = satellite.View("himawari", 140.7, np.full((180, 360), 260.0, dtype=np.float32), area)
         out = satellite.composite([india, japan], np.array([[73.5]]), np.array([[19.5]]))
         self.assertEqual(out[0, 0], 260.0)
@@ -105,38 +105,17 @@ class Satellite(unittest.TestCase):
         self.assertGreater(c[3, 2], c[3, 0])  # storm tops turn blue-purple
         self.assertEqual(c[4, 3], 0)
 
-    def test_only_open_meteosat_images(self):
-        now = dt.datetime(2026, 11, 10, 15, 4, tzinfo=dt.timezone.utc)
-        self.assertEqual(satellite.frame_time(now), dt.datetime(2026, 11, 10, 13, 0, tzinfo=dt.timezone.utc))
-        self.assertEqual(satellite.frame_time(now.replace(minute=6)), dt.datetime(2026, 11, 10, 14, 0, tzinfo=dt.timezone.utc))
-        with self.assertRaises(ValueError):
-            satellite.meteosat("x", dt.datetime(2026, 11, 10, 14, 0, tzinfo=dt.timezone.utc), None, now=now)  # 64 minutes old
-        with self.assertRaises(ValueError):
-            satellite.meteosat("x", dt.datetime(2026, 11, 10, 13, 15, tzinfo=dt.timezone.utc), None, now=now)  # not a full hour
-
-    def test_meteosat_is_off_unless_switched_on(self):
-        with mock.patch.dict("os.environ", {}, clear=True):
-            self.assertFalse(satellite.meteosat_allowed())
-        with mock.patch.dict("os.environ", {"WB_USE_METEOSAT": "1"}):
-            self.assertTrue(satellite.meteosat_allowed())
-        t = dt.datetime(2026, 11, 10, 14, 0, tzinfo=dt.timezone.utc)
-        area = FakeArea(-180, 90, 1.0, (180, 360))
-        fake = lambda name, files: satellite.View(name, 0.0, np.full((180, 360), 220.0, dtype=np.float32), area)
-        with mock.patch.dict("os.environ", {}, clear=True), \
-                mock.patch.object(satellite, "goes", return_value=[]), mock.patch.object(satellite, "himawari", return_value=[]), \
-                mock.patch.object(satellite, "meteosat") as met, mock.patch.object(satellite, "read", side_effect=fake), \
-                mock.patch.object(satellite, "world_canvas", return_value=np.full((64, 64), 220.0, dtype=np.float32)), \
-                mock.patch.object(satellite, "tiles_from_canvas", return_value={"0/0/0": b"x"}):
-            with tempfile.TemporaryDirectory() as work:
-                data, used = satellite.build(t, Path(work))
-        met.assert_not_called()
-        self.assertEqual(used, ["goes-east", "goes-west", "himawari"])
-        header, _ = maptiles.unpack(data)
-        self.assertNotIn("EUMETSAT", header["credit"])
+    def test_frame_time_and_no_meteosat(self):
+        now = dt.datetime(2026, 11, 10, 15, 12, tzinfo=dt.timezone.utc)
+        self.assertEqual(satellite.frame_time(now), dt.datetime(2026, 11, 10, 14, 0, tzinfo=dt.timezone.utc))
+        self.assertEqual(satellite.frame_time(now.replace(minute=31)), dt.datetime(2026, 11, 10, 15, 0, tzinfo=dt.timezone.utc))
+        self.assertFalse(hasattr(satellite, "meteosat"))
+        self.assertEqual(set(satellite.READERS), {"goes-east", "goes-west", "himawari"})
+        self.assertNotIn("EUMETSAT", satellite.CREDIT)
 
     def test_canvas_and_tiles(self):
         area = FakeArea(-180, 90, 1.0, (180, 360))
-        v = satellite.View("meteosat-iodc", 45.5, np.full((180, 360), 220.0, dtype=np.float32), area)
+        v = satellite.View("sat-45e", 45.5, np.full((180, 360), 220.0, dtype=np.float32), area)
         canvas = satellite.world_canvas([v], z=2)
         self.assertEqual(canvas.shape, (1024, 1024))
         tiles = satellite.tiles_from_canvas(canvas, 2)

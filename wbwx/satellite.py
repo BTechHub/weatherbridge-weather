@@ -1,20 +1,16 @@
 """World satellite cloud map (infrared, day and night) for the app's Map tab, once an hour.
 
-Five weather satellites, each looking at its own side of the Earth, joined into one picture. Every place is
+Three weather satellites, each looking at its own side of the Earth, joined into one picture. Every place is
 taken from the satellite that sees it most directly:
 
-  Meteosat-9  (45.5 E, Indian Ocean)   EUMETSAT, SEVIRI IR 10.8 um   India, Arabian Sea, Bay of Bengal, Middle East
-  Meteosat 0  (0 E)                    EUMETSAT, SEVIRI IR 10.8 um   Europe, Africa, Atlantic
   Himawari-9  (140.7 E)                JMA via NOAA on AWS, band 13  East Asia, Australia, West Pacific
   GOES-East   (75.2 W)                 NOAA on AWS, ABI band 13      the Americas, Atlantic
   GOES-West   (137 W)                  NOAA on AWS, ABI band 13      East Pacific, Alaska, Hawaii
 
-Licences: NOAA and JMA data via NOAA's open data programme (free, attribution requested). EUMETSAT Meteosat
-data is "Core" data under CC BY 4.0 only when it is an hourly image or at least an hour old, so we only ever
-use the image of the full hour, at least 65 minutes after it was taken, and never anything newer. Credit:
-"Contains modified EUMETSAT Meteosat data <year>". Meteosat needs a free EUMETSAT account:
-EUMETSAT_CONSUMER_KEY and EUMETSAT_CONSUMER_SECRET, and is used only when WB_USE_METEOSAT=1. It is off for now:
-the Data Store licence offered to the account forbids commercial use, so we wait for EUMETSAT's written answer.
+Licences: NOAA and JMA data via NOAA's open data programme (free, attribution requested).
+EUMETSAT Meteosat is not used: the Data Store licence offered to our account forbids commercial use and
+redistribution (BenK, 2026-11-10). Without it, India east of about 67 E comes from Himawari at a slant; Europe,
+most of Africa, the Middle East and the western Arabian Sea are left out (GOES-East reaches only West Africa).
 
 The frame is web map tiles 0..5 (about 5 km a pixel at the equator) packed into one file and uploaded as the
 layer "satellite" (wbwx/maptiles.py, API docs/WEATHERBRIDGE_WEATHER.md in the lorjova repo).
@@ -45,8 +41,8 @@ MAX_ZOOM = 5
 LAYER = "satellite"
 #: Furthest angle from the point under a satellite that is still used (beyond it the view is too slanted).
 MAX_VIEW_DEG = 74.0
-#: EUMETSAT: images younger than this are licensed data, not open data.
-METEOSAT_MIN_AGE = dt.timedelta(minutes=65)
+#: How long after the hour all satellites' full-disk images are on AWS.
+FRAME_LAG = dt.timedelta(minutes=30)
 
 _http = requests.Session()
 _http.headers["User-Agent"] = "WeatherBridge-weather-job (+https://www.lorjova.com/weatherbridge/)"
@@ -121,50 +117,12 @@ def himawari(t: dt.datetime, work: Path) -> list[Path]:
     return out
 
 
-METEOSAT = {"meteosat-iodc": "EO:EUM:DAT:MSG:HRSEVIRI-IODC", "meteosat-0": "EO:EUM:DAT:MSG:HRSEVIRI"}
-
-
-def meteosat(collection: str, t: dt.datetime, work: Path, now: dt.datetime | None = None) -> list[Path]:
-    """The SEVIRI image of the full hour t from the EUMETSAT Data Store (only once it is open data)."""
-    now = now or dt.datetime.now(dt.timezone.utc)
-    if t.minute != 0 or now - t < METEOSAT_MIN_AGE:
-        raise ValueError("Meteosat: only full-hour images at least 65 minutes old are open data")
-    import eumdac
-
-    key, secret = os.environ.get("EUMETSAT_CONSUMER_KEY"), os.environ.get("EUMETSAT_CONSUMER_SECRET")
-    if not key or not secret:
-        raise PermissionError("EUMETSAT_CONSUMER_KEY / EUMETSAT_CONSUMER_SECRET not set")
-    store = eumdac.DataStore(eumdac.AccessToken((key, secret)))
-    naive = t.replace(tzinfo=None)
-    found = [p for p in store.get_collection(collection).search(dtstart=naive - dt.timedelta(minutes=1), dtend=naive + dt.timedelta(minutes=14))]
-    # The repeat cycle of the full hour starts a few seconds after it.
-    found = [p for p in found if p.sensing_start.replace(tzinfo=None) >= naive and p.sensing_start.replace(tzinfo=None) < naive + dt.timedelta(minutes=5)]
-    if not found:
-        raise FileNotFoundError(f"{collection} {t:%H:%M}")
-    prod = found[0]
-    entry = next(e for e in prod.entries if e.endswith(".nat"))
-    path = work / entry
-    for attempt in range(4):
-        try:
-            with prod.open(entry=entry) as src, open(path, "wb") as out:
-                while chunk := src.read(1 << 22):
-                    out.write(chunk)
-            return [path]
-        except Exception:
-            if attempt == 3:
-                raise
-            time.sleep(10 * (attempt + 1))
-    return [path]
-
-
 # --- Reading -----------------------------------------------------------------------------------------------
 
 READERS = {
     "goes-east": ("abi_l2_nc", "C13", -75.2),
     "goes-west": ("abi_l2_nc", "C13", -137.0),
     "himawari": ("ahi_hsd", "B13", 140.7),
-    "meteosat-iodc": ("seviri_l1b_native", "IR_108", 45.5),
-    "meteosat-0": ("seviri_l1b_native", "IR_108", 0.0),
 }
 
 
@@ -281,22 +239,11 @@ def tiles_from_canvas(canvas: np.ndarray, max_zoom: int = MAX_ZOOM, quality: int
 
 
 CREDIT = "NOAA GOES, JMA Himawari (via NOAA)"
-CREDIT_METEOSAT = ", contains modified EUMETSAT Meteosat data {year}"
-
-
-def meteosat_allowed() -> bool:
-    """Meteosat stays off until EUMETSAT confirms in writing that the account's licence allows a paid app.
-
-    The Data Store licence offered to the account on 2026-11-10 ("Meteosat > 1 hr latency") says no operational or
-    commercial use and no redistribution, which conflicts with the CC BY 4.0 open data policy, so we wait.
-    Set WB_USE_METEOSAT=1 only once that is settled.
-    """
-    return os.environ.get("WB_USE_METEOSAT") == "1"
 
 
 def frame_time(now: dt.datetime) -> dt.datetime:
-    """The newest full hour whose Meteosat image is open data."""
-    t = now - METEOSAT_MIN_AGE
+    """The newest full hour whose images are all on AWS."""
+    t = now - FRAME_LAG
     return t.replace(minute=0, second=0, microsecond=0)
 
 
@@ -307,9 +254,6 @@ def build(t: dt.datetime, work: Path) -> tuple[bytes, list[str]]:
         "goes-west": lambda: goes(18, t, work),
         "himawari": lambda: himawari(t, work),
     }
-    if meteosat_allowed():
-        jobs["meteosat-iodc"] = lambda: meteosat(METEOSAT["meteosat-iodc"], t, work)
-        jobs["meteosat-0"] = lambda: meteosat(METEOSAT["meteosat-0"], t, work)
     views, used = [], []
     for name, fetch in jobs.items():
         t0 = time.time()
@@ -323,15 +267,14 @@ def build(t: dt.datetime, work: Path) -> tuple[bytes, list[str]]:
         finally:
             for f in glob.glob(str(work / "*")):
                 os.remove(f)
-    if len(views) < 3:
+    if len(views) < 2:
         raise RuntimeError(f"only {used} available, not publishing")
     t0 = time.time()
     canvas = world_canvas(views)
     tiles = tiles_from_canvas(canvas)
     log.info("drew %d tiles in %.0fs", len(tiles), time.time() - t0)
     iso = t.strftime("%Y-%m-%dT%H:%MZ")
-    credit = CREDIT + (CREDIT_METEOSAT.format(year=t.year) if any(u.startswith("meteosat") for u in used) else "")
-    return maptiles.pack(LAYER, iso, tiles, 0, MAX_ZOOM, credit), used
+    return maptiles.pack(LAYER, iso, tiles, 0, MAX_ZOOM, CREDIT), used
 
 
 def main() -> None:
@@ -339,7 +282,7 @@ def main() -> None:
 
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", type=Path, default=Path("build/satellite"))
-    ap.add_argument("--time", help="frame time, e.g. 2026-11-10T14:00Z (default: newest open full hour)")
+    ap.add_argument("--time", help="frame time, e.g. 2026-11-10T14:00Z (default: newest full hour on AWS)")
     ap.add_argument("--publish", action="store_true")
     a = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
