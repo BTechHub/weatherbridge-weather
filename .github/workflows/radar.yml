@@ -31,6 +31,18 @@ jobs:
           cache-dependency-path: requirements.txt
       - run: pip install -r requirements.txt
       - run: python -m wbwx.radar --out "$RUNNER_TEMP/radar" --publish
+      # Tells the admin page (api.lorjova.com/admin, Data jobs) how this run ended; never fails the run.
+      - name: Report to the admin page
+        if: ${{ always() }}
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          report() {
+            curl -sS -m 20 -o /dev/null -w "report $1 $2: HTTP %{http_code}\n" -X POST https://api.lorjova.com/weatherbridge/ingest/report \
+              -H "Authorization: Bearer $WB_WEATHER_INGEST_TOKEN" -H "Content-Type: application/json" \
+              -d "{\"job\":\"$1\",\"result\":\"$2\",\"url\":\"$RUN_URL\"}" || echo "::warning::Could not report $1 to the admin page"
+          }
+          report radar "${{ job.status }}"
       # GitHub pauses scheduled workflows in a repo with no activity for 60 days; re-enabling keeps them running.
       - name: Keep the schedules alive
         if: ${{ !cancelled() && github.event_name == 'schedule' }}

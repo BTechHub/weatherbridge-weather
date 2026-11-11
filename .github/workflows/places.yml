@@ -26,3 +26,15 @@ jobs:
       - run: pip install -r requirements.txt
       - run: python -m unittest
       - run: python -m wbwx.places --out "$RUNNER_TEMP/places" --publish
+      # Tells the admin page (api.lorjova.com/admin, Data jobs) how this run ended; never fails the run.
+      - name: Report to the admin page
+        if: ${{ always() }}
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          report() {
+            curl -sS -m 20 -o /dev/null -w "report $1 $2: HTTP %{http_code}\n" -X POST https://api.lorjova.com/weatherbridge/ingest/report \
+              -H "Authorization: Bearer $WB_WEATHER_INGEST_TOKEN" -H "Content-Type: application/json" \
+              -d "{\"job\":\"$1\",\"result\":\"$2\",\"url\":\"$RUN_URL\"}" || echo "::warning::Could not report $1 to the admin page"
+          }
+          report places "${{ job.status }}"
