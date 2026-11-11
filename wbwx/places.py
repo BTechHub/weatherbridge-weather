@@ -21,6 +21,10 @@ log = logging.getLogger("wbwx.places")
 
 DUMP = "https://download.geonames.org/export/dump/"
 MAX_ALT_NAMES = 40
+# Big cities have hundreds of other names (old names like Bombay or Madras, and every language's spelling).
+# The first 40 alone dropped many of them, so cities this big keep up to MAX_ALT_NAMES_BIG.
+BIG_CITY_POPULATION = 100_000
+MAX_ALT_NAMES_BIG = 400
 MAX_ALT_LEN = 60
 
 
@@ -66,6 +70,7 @@ def places(text: str, adm1: dict[str, tuple[str, int]]) -> list[list]:
         gid, name, ascii_, alts, lat, lon, fclass, fcode, cc, _cc2, a1 = f[:11]
         pop, elev, dem, tz = f[14], f[15], f[16], f[17]
         a = adm1.get(f"{cc}.{a1}")
+        limit = MAX_ALT_NAMES_BIG if int(pop or 0) >= BIG_CITY_POPULATION else MAX_ALT_NAMES
         alt = []
         seen = {name.lower()}
         for n in [ascii_, *alts.split(",")]:
@@ -73,7 +78,7 @@ def places(text: str, adm1: dict[str, tuple[str, int]]) -> list[list]:
             if n and len(n) <= MAX_ALT_LEN and n.lower() not in seen and not n.startswith("http"):
                 seen.add(n.lower())
                 alt.append(n)
-            if len(alt) >= MAX_ALT_NAMES:
+            if len(alt) >= limit:
                 break
         height = int(elev) if elev.lstrip("-").isdigit() else int(dem) if dem.lstrip("-").isdigit() and dem != "-9999" else None
         rows.append([int(gid), name, round(float(lat), 5), round(float(lon), 5), height, fcode, cc, a[0] if a else None, a[1] if a else None, tz, int(pop or 0), alt])
