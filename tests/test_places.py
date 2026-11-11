@@ -26,6 +26,20 @@ class Places(unittest.TestCase):
         self.assertEqual(len(big[11]), 61)
         self.assertEqual(len(small[11]), places.MAX_ALT_NAMES)
 
+    def test_small_us_towns_are_added_once(self):
+        def line(gid, name, fclass, fcode, pop):
+            return "\t".join([gid, name, name, "", "40.1", "-75.2", fclass, fcode, "US", "", "PA", "", "", "", pop, "", "90", "America/New_York", "2024-01-01"])
+        us = "\n".join([
+            line("5180000", "Tinytown", "P", "PPL", "0"),          # under 500 people: added
+            line("5180001", "Old Mill", "P", "PPLQ", "0"),          # abandoned: skipped
+            line("5180002", "Big Lake", "H", "LK", "0"),            # not a town: skipped
+            line("1260607", "Panaji", "P", "PPLA", "114405"),      # already in cities500: not twice
+        ])
+        with tempfile.TemporaryDirectory() as d:
+            data = json.loads(gzip.decompress(places.build(Path(d), CITIES, ADMIN1 + "US.PA\tPennsylvania\tPennsylvania\t6254927\n", COUNTRY, [places.towns(us)]).read_bytes()))
+        self.assertEqual([p[1] for p in data["places"]], ["Panaji", "Tinytown"])
+        self.assertEqual(data["places"][1][7], "Pennsylvania")
+
 
 if __name__ == "__main__":
     unittest.main()

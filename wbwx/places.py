@@ -2,6 +2,8 @@
 
 Builds places.json.gz (format in the API's weather/places.ts) from the GeoNames dumps and uploads it:
 cities500 (every place with 500+ people, about 200,000), admin1 names and country names.
+For the countries in ALL_TOWNS_COUNTRIES (the US), every populated place is added from the country's full dump,
+so small towns and villages under 500 people are found too.
 
     python -m wbwx.places --out build/places [--publish]
 """
@@ -26,6 +28,10 @@ MAX_ALT_NAMES = 40
 BIG_CITY_POPULATION = 100_000
 MAX_ALT_NAMES_BIG = 400
 MAX_ALT_LEN = 60
+# Countries where every town and village is listed, not only places with 500+ people.
+ALL_TOWNS_COUNTRIES = ("US",)
+# Populated places that are gone or not a place to live: historical, abandoned, destroyed, religious centres.
+SKIP_CODES = {"PPLH", "PPLQ", "PPLW", "PPLCH", "PPLR"}
 
 
 def fetch(name: str) -> bytes:
@@ -85,14 +91,32 @@ def places(text: str, adm1: dict[str, tuple[str, int]]) -> list[list]:
     return rows
 
 
-def build(out: Path, cities: str, adm1_text: str, country_text: str) -> Path:
+def towns(text: str) -> str:
+    """The populated places (feature class P) of a full country dump, in the cities500 line format."""
+    keep = []
+    for line in text.splitlines():
+        f = line.split("\t")
+        if len(f) >= 19 and f[6] == "P" and f[7] not in SKIP_CODES:
+            keep.append(line)
+    return "\n".join(keep)
+
+
+def build(out: Path, cities: str, adm1_text: str, country_text: str, extra: list[str] | None = None) -> Path:
     out.mkdir(parents=True, exist_ok=True)
+    adm1 = admin1(adm1_text)
+    rows = places(cities, adm1)
+    seen = {r[0] for r in rows}
+    for text in extra or []:
+        for r in places(text, adm1):
+            if r[0] not in seen:
+                seen.add(r[0])
+                rows.append(r)
     data = {
         "formatVersion": 1,
-        "source": "GeoNames cities500, www.geonames.org, CC BY 4.0",
+        "source": "GeoNames cities500 and all US towns, www.geonames.org, CC BY 4.0",
         "builtAt": int(time.time()),
         "countries": countries(country_text),
-        "places": places(cities, admin1(adm1_text)),
+        "places": rows,
     }
     path = out / "places.json.gz"
     path.write_bytes(gzip.compress(json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode("utf-8"), compresslevel=9, mtime=0))
@@ -108,7 +132,12 @@ def main(argv: list[str] | None = None) -> int:
     a = ap.parse_args(argv)
     with zipfile.ZipFile(io.BytesIO(fetch("cities500.zip"))) as z:
         cities = z.read("cities500.txt").decode("utf-8")
-    path = build(Path(a.out), cities, fetch("admin1CodesASCII.txt").decode("utf-8"), fetch("countryInfo.txt").decode("utf-8"))
+    extra = []
+    for cc in ALL_TOWNS_COUNTRIES:
+        with zipfile.ZipFile(io.BytesIO(fetch(f"{cc}.zip"))) as z:
+            extra.append(towns(z.read(f"{cc}.txt").decode("utf-8")))
+        log.info("places: %s full list read", cc)
+    path = build(Path(a.out), cities, fetch("admin1CodesASCII.txt").decode("utf-8"), fetch("countryInfo.txt").decode("utf-8"), extra)
     if a.publish:
         from . import publish
 
