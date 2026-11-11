@@ -1,0 +1,31 @@
+name: blend-check
+
+# Prints each model's rain, the ensemble's wet share and the mix at one place for the next hours,
+# from the newest runs. Nothing is uploaded. Runs on pull requests that touch the mix, or by hand.
+on:
+  pull_request:
+    paths: ["wbwx/blend.py", "wbwx/job.py", "wbwx/fetch.py", ".github/workflows/blend-check.yml"]
+  workflow_dispatch:
+    inputs:
+      lat: { description: "Latitude", default: "8.48" }
+      lon: { description: "Longitude", default: "76.95" }
+      hours: { description: "Hours ahead", default: "48" }
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - run: pip install -r requirements.txt
+      - run: python -m unittest
+      - name: Thiruvananthapuram
+        run: python -m wbwx.blend check --lat "${{ inputs.lat || '8.48' }}" --lon "${{ inputs.lon || '76.95' }}" --hours "${{ inputs.hours || '48' }}"

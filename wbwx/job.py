@@ -19,7 +19,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import fetch
+from . import blend, fetch
 from .models import DATASETS, Dataset
 from .tiles import MISSING, NX, NY, TILE, TILE_COLS, TILE_ROWS, all_missing, encode, quantize, tile_id
 
@@ -66,6 +66,22 @@ def precipitation_rates(acc: np.ndarray, ranges: list[tuple[int, int] | None], s
     return out
 
 
+# Blended fields (names in wbwx/blend.py) and the GFS variables they replace.
+BLEND_TO_GFS = {"cloud": "cloud_cover", "u": "wind_u_10m", "v": "wind_v_10m", "gust": "wind_gusts_10m"}
+
+
+def physical(q: np.ndarray, scale: float) -> np.ndarray:
+    q = np.asarray(q)
+    return np.where(q == MISSING, np.nan, q / scale).astype(np.float32)
+
+
+def wet_fraction(rate: np.ndarray | None) -> np.ndarray | None:
+    """Share of the cells around each point with at least WET_MM_PER_H (None when the step has no rain data)."""
+    if rate is None or not np.isfinite(rate).any():
+        return None
+    return box_mean((np.nan_to_num(rate) >= WET_MM_PER_H).astype(np.float32), POP_RADIUS)
+
+
 def box_mean(x: np.ndarray, r: int) -> np.ndarray:
     """Mean over a (2r+1)^2 box; longitude wraps around, latitude edges are clamped."""
     p = np.pad(x, ((r, r), (0, 0)), mode="edge")
@@ -86,6 +102,7 @@ def build(ds: Dataset, cycle: dt.datetime, work: Path, steps: tuple[int, ...], w
     scratch = work / "scratch" / ds.name
     scratch.mkdir(parents=True, exist_ok=True)
     T = len(steps)
+    scale_of = {v.name: v.scale for v in ds.vars}
     src_vars = [v for v in ds.vars if v.source]
     store = {v.name: np.lib.format.open_memmap(scratch / f"{v.name}.npy", "w+", np.int16, (T, NY, NX)) for v in ds.vars}
     for m in store.values():
@@ -118,16 +135,39 @@ def build(ds: Dataset, cycle: dt.datetime, work: Path, steps: tuple[int, ...], w
             if n % 20 == 0:
                 log.info("%s %s: %d/%d steps (%.0fs)", ds.name, cycle, n, T, time.time() - t0)
 
+    sources: list[dict] = []
     if acc_var:
         rates = precipitation_rates(acc, acc_ranges, steps)
+        loaded = blend.load_all(cycle, steps, scratch / "blend") if ds.blend else []
+        sources = [lm.info() for lm in loaded]
+        wet: list[np.ndarray | None] = [None] * T
+        weights = {"gfs": blend.WEIGHTS["gfs"], **{lm.model.name: blend.WEIGHTS[lm.model.name] for lm in loaded}}
+        gaps = blend.intervals(steps)
+        for i in range(T):
+            per: dict = {"gfs": rates[i]}
+            if loaded:
+                gfs = {"precip": rates[i].copy(), **{b: physical(store[n][i], scale_of[n]) for b, n in BLEND_TO_GFS.items()}}
+                mixed, per = blend.mix_step(gfs, loaded, steps[i], gaps[i])
+                rates[i] = mixed["precip"]
+                for b, n in BLEND_TO_GFS.items():
+                    store[n][i] = quantize(mixed[b], scale_of[n])
+            fractions = {m: wet_fraction(r) for m, r in per.items()}
+            if any(f is not None for f in fractions.values()):
+                wet[i] = blend.weighted(fractions, weights)
+        if loaded:
+            log.info("%s %s: mixed with %s", ds.name, cycle, ", ".join(f"{x['model']} {dt.datetime.fromtimestamp(x['run'], dt.timezone.utc):%d %H}z" for x in sources))
         for i in range(T):
             store[acc_var.name][i] = quantize(rates[i], acc_var.scale)
         if "precipitation_probability" in store:
-            wet = [None if not np.isfinite(rates[i]).any() else box_mean((np.nan_to_num(rates[i]) >= WET_MM_PER_H).astype(np.float32), POP_RADIUS) for i in range(T)]
+            ens = blend.load_ens(cycle, steps, scratch / "ens", WET_MM_PER_H) if ds.blend else None
+            if ens:
+                sources.append(ens.info())
             for i in range(T):
                 around = [w for w in wet[max(0, i - 1) : i + 2] if w is not None]
                 if wet[i] is not None and around:
-                    store["precipitation_probability"][i] = quantize(100 * np.mean(around, axis=0), 1)
+                    near = np.mean(around, axis=0)
+                    share = blend.ens_pop_at(ens, steps[i], gaps[i]) if ens else None
+                    store["precipitation_probability"][i] = quantize(100 * blend.mix_pop(near, share), 1)
         del rates
     if ds.derive:
         scale = {v.name: v.scale for v in ds.vars}
@@ -181,8 +221,9 @@ def build(ds: Dataset, cycle: dt.datetime, work: Path, steps: tuple[int, ...], w
     manifest = {
         "formatVersion": FORMAT_VERSION,
         "dataset": ds.name,
-        "title": ds.title,
-        "licence": ds.licence,
+        "title": ds.title + "".join(f" + {x['title']}" for x in sources),
+        "licence": "; ".join(dict.fromkeys([ds.licence] + [x["licence"] for x in sources])),
+        "sources": sources,
         "cycle": int(cycle.timestamp()),
         "steps": list(steps),
         "vars": [{"name": v.name, "scale": v.scale, **({"circular": True} if v.circular else {})} for v in kept],

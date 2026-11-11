@@ -1,7 +1,8 @@
 """Datasets the job builds. Each one lists its source fields, how to convert them and their scale.
 
 NOAA GFS and GFS-Wave are US government works (public domain), from the NOAA Open Data
-Dissemination bucket on AWS (noaa-gfs-bdp-pds), which needs no account.
+Dissemination bucket on AWS (noaa-gfs-bdp-pds), which needs no account. The gfs dataset's rain,
+rain chance, cloud and wind are a mix with ECMWF open data and DWD ICON (see wbwx/blend.py).
 """
 from __future__ import annotations
 
@@ -44,6 +45,8 @@ class Dataset:
     reference: str = ""
     # Works out derived variables for one step: (physical values by name) -> {name: values}.
     derive: Callable[[dict[str, np.ndarray]], dict[str, np.ndarray]] | None = None
+    # Mix rain, rain chance, cloud and wind with ECMWF and DWD ICON (wbwx/blend.py).
+    blend: bool = False
 
 
 def gfs_url(day: str, hh: int, step: int) -> str:
@@ -59,6 +62,7 @@ GFS = Dataset(
     title="NOAA GFS 0.25 degree",
     licence="NOAA/NCEP GFS, US government work (public domain)",
     url=gfs_url,
+    blend=True,
     vars=(
         Var("temperature_2m", "TMP:2 m above ground", 10, K),
         Var("relative_humidity_2m", "RH:2 m above ground", 1),
