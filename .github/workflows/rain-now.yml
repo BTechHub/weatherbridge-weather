@@ -1,0 +1,46 @@
+name: rain-now
+
+# Every 10 minutes: "rain clouds now" over India from Himawari-9 cloud tops (wbwx/rainnow.py), about
+# 370 KB a scan. The API keeps only the newest few. Needs WB_WEATHER_INGEST_TOKEN.
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+    inputs:
+      time:
+        description: "Scan time to send again, e.g. 2026-11-11T11:50Z (empty: the newest)"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rain-now
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      WB_WEATHER_INGEST_URL: https://api.lorjova.com/weatherbridge/ingest/weather
+      WB_WEATHER_INGEST_TOKEN: ${{ secrets.WB_WEATHER_INGEST_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - run: pip install -r requirements.txt "satpy>=0.55"
+      - run: python -m wbwx.rainnow --out "$RUNNER_TEMP/rainnow" --publish ${{ inputs.time && format('--time {0}', inputs.time) || '' }}
+      # Tells the admin page (api.lorjova.com/admin, Data jobs) how this run ended; never fails the run.
+      - name: Report to the admin page
+        if: ${{ always() }}
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          curl -sS -m 20 -o /dev/null -w "report rain-now ${{ job.status }}: HTTP %{http_code}\n" -X POST https://api.lorjova.com/weatherbridge/ingest/report \
+            -H "Authorization: Bearer $WB_WEATHER_INGEST_TOKEN" -H "Content-Type: application/json" \
+            -d "{\"job\":\"rain-now\",\"result\":\"${{ job.status }}\",\"url\":\"$RUN_URL\"}" || echo "::warning::Could not report rain-now to the admin page"

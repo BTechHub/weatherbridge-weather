@@ -22,6 +22,12 @@ GFS alone if both extra sources fail. The run's manifest lists the sources used.
 `python -m wbwx.blend check --lat 8.48 --lon 76.95` prints every model at one place (also the
 `blend-check` workflow, on pull requests and by hand).
 
+## Rain clouds now (`rain-now`, every 10 minutes)
+
+`wbwx/rainnow.py` reads Himawari-9 band 13 cloud-top temperatures over India (66-100 E, 0-37 N, 0.04 degree)
+and uploads one small map (about 370 KB). The API's `/v1/rain-now` uses it to say whether tall rain clouds are
+over a place now, so the app does not show "raining" from the forecast alone. JMA Himawari via NOAA open data.
+
 Waves: NOAA GFS-Wave. Also in this repo: ocean currents and sea temperature (Copernicus Marine),
 tides (EOT20), ground heights (NOAA ETOPO 2022), places (GeoNames), satellite clouds (GOES,
 Himawari) and radar (MRMS, OPERA).

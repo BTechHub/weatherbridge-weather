@@ -99,3 +99,22 @@ def upload_sky(layer: str, t, data: bytes) -> None:
         "POST", f"{url}/{layer}/{fid}/finish", h, json={"parts": len(parts), "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()}
     ).json()
     log.info("%s frame %s: %.1f MB in %d parts, %.0fs: %s", layer, fid, len(data) / 1e6, len(parts), time.time() - t0, res)
+
+
+# --- Rain clouds now (wbwx/rainnow.py): one small file every 10 minutes. ---
+
+
+def _now_base() -> tuple[str, dict]:
+    url, h = _base()
+    return url.rsplit("/weather", 1)[0] + "/rain-now", h  # .../weatherbridge/ingest/rain-now
+
+
+def rain_now_live(t) -> bool:
+    url, h = _now_base()
+    return _call("GET", f"{url}/status", h).json().get("time") == t.strftime("%Y-%m-%dT%H:%MZ")
+
+
+def upload_rain_now(t, data: bytes) -> None:
+    url, h = _now_base()
+    res = _call("PUT", f"{url}/{frame_id(t)}", {**h, "Content-Type": "application/octet-stream"}, data=data).json()
+    log.info("rain-now %s: %.0f KB: %s", frame_id(t), len(data) / 1e3, res)
