@@ -14,7 +14,7 @@ NOAA GFS 0.25 degree is the base. Rain, rain chance, cloud and wind are a mix of
 | ECMWF IFS 0.25 open data | 45% | rain, cloud, wind, gusts |
 | DWD ICON Global 13 km | 30% | rain, cloud, wind |
 | NOAA GFS 0.25 | 25% | rain, cloud, wind, gusts, and everything else |
-| ECMWF ENS (50 members) | | rain chance: 60% share of wet members, 40% the three models' wet neighbourhood |
+| ECMWF ENS (50 members) | | rain chance: 60% share of wet members (scaled from its 3 h steps to 1 h), 40% the three models' wet neighbourhood |
 
 A model that cannot be downloaded drops out and the others' shares grow, so the job still publishes
 GFS alone if both extra sources fail. The run's manifest lists the sources used.

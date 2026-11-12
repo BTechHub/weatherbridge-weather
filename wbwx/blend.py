@@ -507,13 +507,24 @@ def load_ens(cycle: dt.datetime, steps: tuple[int, ...], scratch: Path, wet_mm_p
         return None
 
 
+def per_interval(p: np.ndarray, long_h: float, short_h: float) -> np.ndarray:
+    """Chance of rain in a short interval from the chance over a longer one that holds it, taking each part
+    of the long interval as equally and independently likely to be wet: 1 - (1 - p)^(short/long).
+    A 68% chance over 3 hours is about a 32% chance in any one of those hours."""
+    if short_h >= long_h:
+        return p
+    return (1 - np.power(np.clip(1 - p, 0, 1), short_h / long_h)).astype(np.float32)
+
+
 def ens_pop_at(lm: Loaded, gfs_step: float, interval_h: float | None) -> np.ndarray | None:
-    """The ensemble wet share for the interval that holds the end of this GFS step's interval."""
+    """The ensemble's chance of rain in this GFS step's interval (1 h to 120 h, then 3 h). The ensemble
+    gives the share of wet members over its own 3 or 6 hour steps, so that share is scaled down to the
+    shorter GFS interval; without this an hourly chance read like a 3-hour one (too high)."""
     t = gfs_step + lm.offset_h
     k = int(np.searchsorted(lm.steps, t, side="left"))
     if not interval_h or k < 1 or k >= len(lm.steps) or k not in lm.good["pop"]:
         return None
-    return lm.data["pop"][k]
+    return per_interval(np.asarray(lm.data["pop"][k]), lm.steps[k] - lm.steps[k - 1], interval_h)
 
 
 def mix_pop(det_fraction: np.ndarray, ens_share: np.ndarray | None) -> np.ndarray:

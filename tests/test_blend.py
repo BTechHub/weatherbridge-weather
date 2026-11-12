@@ -85,6 +85,13 @@ class Grids(unittest.TestCase):
         self.assertEqual(float(out[320, 308]), 5.0)
 
 
+class PerHour(unittest.TestCase):
+    def test_three_hour_chance_to_one_hour(self):
+        p = blend.per_interval(np.array([0.0, 0.68, 1.0], np.float32), 3, 1)
+        np.testing.assert_allclose(p, [0.0, 0.316, 1.0], atol=0.002)
+        np.testing.assert_allclose(blend.per_interval(np.array([0.5]), 3, 3), [0.5])
+
+
 class Steps(unittest.TestCase):
     def test_published_steps(self):
         self.assertEqual(blend.ecmwf_steps(6)[-1], 144)
@@ -112,7 +119,9 @@ class Ensemble(unittest.TestCase):
         lm = blend.Loaded(blend.ECMWF_ENS, dt.datetime(2026, 11, 11, 0, tzinfo=dt.timezone.utc), 6.0, [6.0, 9.0, 12.0])
         lm.data["pop"] = np.stack([full(np.nan), full(0.2), full(0.7)])
         lm.good = {"pop": [1, 2]}
-        self.assertAlmostEqual(float(blend.ens_pop_at(lm, 1, 1.0)[0, 0]), 0.2)  # hour 7: interval 6-9
-        self.assertAlmostEqual(float(blend.ens_pop_at(lm, 3, 1.0)[0, 0]), 0.2)  # hour 9 ends that interval
-        self.assertAlmostEqual(float(blend.ens_pop_at(lm, 4, 1.0)[0, 0]), 0.7)
+        one_h = lambda p: 1 - (1 - p) ** (1 / 3)  # noqa: E731
+        self.assertAlmostEqual(float(blend.ens_pop_at(lm, 1, 1.0)[0, 0]), one_h(0.2), places=5)  # hour 7: interval 6-9
+        self.assertAlmostEqual(float(blend.ens_pop_at(lm, 3, 1.0)[0, 0]), one_h(0.2), places=5)  # hour 9 ends it
+        self.assertAlmostEqual(float(blend.ens_pop_at(lm, 4, 1.0)[0, 0]), one_h(0.7), places=5)
+        self.assertAlmostEqual(float(blend.ens_pop_at(lm, 4, 3.0)[0, 0]), 0.7, places=5)  # 3-hourly GFS steps: as is
         self.assertIsNone(blend.ens_pop_at(lm, 7, 1.0))
